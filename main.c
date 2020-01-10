@@ -724,6 +724,9 @@ create_swapchain(struct vkcube *vc)
       minImageCount = surface_caps.maxImageCount;
    }
 
+   /* reuse images from the old swap chain if possible */
+   VkSwapchainKHR old_swap_chain = vc->swap_chain;
+
    vkCreateSwapchainKHR(vc->device,
       &(VkSwapchainCreateInfoKHR) {
          .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -740,7 +743,12 @@ create_swapchain(struct vkcube *vc)
          .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
          .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
          .presentMode = present_mode,
+         .oldSwapchain = old_swap_chain,
       }, NULL, &vc->swap_chain);
+
+   if (old_swap_chain) {
+      vkDestroySwapchainKHR(vc->device, old_swap_chain, NULL);
+   }
 
    vkGetSwapchainImagesKHR(vc->device, vc->swap_chain,
                            &vc->image_count, NULL);
@@ -857,7 +865,7 @@ init_xcb(struct vkcube *vc)
 
    init_vk_objects(vc);
 
-   vc->image_count = 0;
+   vc->swap_chain = VK_NULL_HANDLE;
 
    return 0;
 }
@@ -884,6 +892,8 @@ mainloop_xcb(struct vkcube *vc)
    xcb_key_press_event_t *key_press;
    xcb_client_message_event_t *client_message;
    xcb_configure_notify_event_t *configure;
+   int win_width = vc->width;
+   int win_height = vc->height;
 
    while (1) {
       bool repaint = false;
@@ -906,16 +916,10 @@ mainloop_xcb(struct vkcube *vc)
 
          case XCB_CONFIGURE_NOTIFY:
             configure = (xcb_configure_notify_event_t *) event;
-            if (vc->width != configure->width ||
-                vc->height != configure->height) {
-               if (vc->image_count > 0) {
-                  vkDestroySwapchainKHR(vc->device, vc->swap_chain, NULL);
-                  vc->image_count = 0;
-               }
-
-               vc->width = configure->width;
-               vc->height = configure->height;
-            }
+            /* be careful to not update vc->width / vc->height until the
+               swapchain is recreated to match */
+            win_width = configure->width;
+            win_height = configure->height;
             break;
 
          case XCB_EXPOSE:
@@ -936,7 +940,7 @@ mainloop_xcb(struct vkcube *vc)
       }
 
       if (repaint) {
-         if (vc->image_count == 0)
+         if (!vc->swap_chain)
             create_swapchain(vc);
 
          uint32_t index;
@@ -948,9 +952,14 @@ mainloop_xcb(struct vkcube *vc)
             break;
          case VK_NOT_READY: /* try later */
          case VK_TIMEOUT:   /* try later */
-         case VK_ERROR_OUT_OF_DATE_KHR: /* handled by native events */
             schedule_xcb_repaint(vc);
             continue;
+         case VK_ERROR_OUT_OF_DATE_KHR: {
+            vc->width = win_width;
+            vc->height = win_height;
+            create_swapchain(vc);
+            schedule_xcb_repaint(vc);
+         } continue;
          default:
             return;
          }
