@@ -682,6 +682,8 @@ choose_surface_format(struct vkcube *vc)
    return format;
 }
 
+static VkPresentModeKHR present_mode_override = VK_PRESENT_MODE_MAX_ENUM_KHR;
+
 static void
 create_swapchain(struct vkcube *vc)
 {
@@ -711,6 +713,10 @@ create_swapchain(struct vkcube *vc)
       }
    }
 
+   if (present_mode_override != VK_PRESENT_MODE_MAX_ENUM_KHR) {
+      present_mode = present_mode_override;
+   }
+
    uint32_t minImageCount = 2;
    if (minImageCount < surface_caps.minImageCount) {
       if (surface_caps.minImageCount > MAX_NUM_IMAGES)
@@ -726,6 +732,10 @@ create_swapchain(struct vkcube *vc)
 
    /* reuse images from the old swap chain if possible */
    VkSwapchainKHR old_swap_chain = vc->swap_chain;
+
+   if (old_swap_chain) {
+      printf("GOT OLD SWAPCHAIN\n");
+   }
 
    vkCreateSwapchainKHR(vc->device,
       &(VkSwapchainCreateInfoKHR) {
@@ -896,6 +906,7 @@ mainloop_xcb(struct vkcube *vc)
    int win_height = vc->height;
 
    while (1) {
+      bool recreate = false;
       bool repaint = false;
       event = xcb_wait_for_event(vc->xcb.conn);
       while (event) {
@@ -929,6 +940,16 @@ mainloop_xcb(struct vkcube *vc)
          case XCB_KEY_PRESS:
             key_press = (xcb_key_press_event_t *) event;
 
+            if (key_press->detail == 10) {
+               //present_mode_override = VK_PRESENT_MODE_MAILBOX_KHR;
+               recreate = true;
+            }
+
+            if (key_press->detail == 11) {
+               //present_mode_override = VK_PRESENT_MODE_FIFO_KHR;
+               recreate = true;
+            }
+
             if (key_press->detail == 9)
                exit(0);
 
@@ -937,6 +958,12 @@ mainloop_xcb(struct vkcube *vc)
          free(event);
 
          event = xcb_poll_for_event(vc->xcb.conn);
+      }
+
+      if (recreate) {
+         create_swapchain(vc);
+         schedule_xcb_repaint(vc);
+         continue;
       }
 
       if (repaint) {
